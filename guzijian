@@ -1,0 +1,507 @@
+import pygame
+import sys
+import random
+import math
+from pygame.locals import *
+
+# 初始化pygame
+pygame.init()
+
+# 屏幕设置
+WIDTH, HEIGHT = 1000, 700
+screen = pygame.display.set_mode((WIDTH, HEIGHT))
+pygame.display.set_caption("垄断经济学模拟游戏")
+
+# 颜色定义
+BACKGROUND = (240, 248, 255)
+PANEL_BG = (230, 240, 250)
+TEXT_COLOR = (30, 30, 60)
+HIGHLIGHT = (70, 130, 180)
+BUTTON_COLOR = (65, 105, 225)
+BUTTON_HOVER = (100, 149, 237)
+RED = (220, 60, 60)
+GREEN = (60, 180, 75)
+YELLOW = (218, 165, 32)
+PURPLE = (147, 112, 219)
+
+# 字体
+font_large = pygame.font.SysFont("simhei", 36)
+font_medium = pygame.font.SysFont("simhei", 28)
+font_small = pygame.font.SysFont("simhei", 22)
+font_tiny = pygame.font.SysFont("simhei", 18)
+
+# 游戏状态
+class GameState:
+    def __init__(self):
+        self.reset()
+        
+    def reset(self):
+        self.round = 1
+        self.balance = 10000  # 初始资金
+        self.market_share = 0.65  # 市场份额
+        self.price = 100  # 产品价格
+        self.production = 800  # 产量
+        self.demand = 800  # 需求量
+        self.cost_per_unit = 40  # 单位成本
+        self.fixed_costs = 2000  # 固定成本
+        self.antitrust_level = 0  # 反垄断压力
+        self.public_opinion = 50  # 公众舆论 (0-100)
+        self.innovation = 25  # 创新水平 (0-100)
+        self.actions = []
+        self.last_profit = 0
+        self.game_over = False
+        self.win = False
+        self.lose_reason = ""
+        
+    def calculate_profit(self):
+        # 计算收入
+        revenue = min(self.production, self.demand) * self.price
+        
+        # 计算成本
+        variable_costs = self.production * self.cost_per_unit
+        total_costs = variable_costs + self.fixed_costs
+        
+        # 计算利润
+        profit = revenue - total_costs
+        self.last_profit = profit
+        return profit
+    
+    def update_demand(self):
+        # 需求受价格和公众舆论影响
+        price_factor = 1.0 - (self.price - 80) / 200
+        opinion_factor = 0.7 + (self.public_opinion / 200)
+        innovation_factor = 0.8 + (self.innovation / 200)
+        
+        # 基本需求
+        base_demand = 1000
+        
+        # 计算新需求
+        self.demand = base_demand * price_factor * opinion_factor * innovation_factor
+        self.demand = max(300, min(1500, int(self.demand)))
+        
+    def update_antitrust(self):
+        # 反垄断压力受市场份额、价格和公众舆论影响
+        share_factor = max(0, (self.market_share - 0.5) * 2)
+        price_factor = max(0, (self.price - 90) / 60)
+        opinion_factor = 1.0 - (self.public_opinion / 100)
+        
+        # 增加反垄断压力
+        increase = (share_factor + price_factor + opinion_factor) * 0.1
+        self.antitrust_level = min(100, self.antitrust_level + increase)
+        
+    def update_public_opinion(self):
+        # 公众舆论受价格和反垄断行动影响
+        price_factor = -((self.price - 80) / 20)
+        antitrust_factor = -self.antitrust_level / 50
+        
+        # 创新对公众舆论的正面影响
+        innovation_factor = self.innovation / 100
+        
+        # 更新公众舆论
+        change = price_factor + antitrust_factor + innovation_factor
+        self.public_opinion = max(0, min(100, self.public_opinion + change))
+    
+    def advance_round(self):
+        if self.game_over:
+            return
+            
+        # 更新游戏状态
+        self.round += 1
+        self.update_demand()
+        self.update_antitrust()
+        self.update_public_opinion()
+        
+        # 创新自然增长
+        self.innovation = min(100, self.innovation + 0.5)
+        
+        # 计算利润并更新余额
+        profit = self.calculate_profit()
+        self.balance += profit
+        
+        # 检查游戏结束条件
+        if self.balance <= 0:
+            self.game_over = True
+            self.lose_reason = "公司破产"
+        elif self.antitrust_level >= 100:
+            self.game_over = True
+            self.lose_reason = "反垄断机构拆分你的公司"
+        elif self.round > 20:
+            self.game_over = True
+            self.win = True
+        elif self.market_share >= 0.85:
+            self.game_over = True
+            self.win = True
+            self.lose_reason = "你完全垄断了市场！"
+
+# 按钮类
+class Button:
+    def __init__(self, x, y, width, height, text, action=None, cost=0, enabled=True):
+        self.rect = pygame.Rect(x, y, width, height)
+        self.text = text
+        self.action = action
+        self.cost = cost
+        self.enabled = enabled
+        self.hovered = False
+        
+    def draw(self, screen):
+        color = BUTTON_HOVER if self.hovered else BUTTON_COLOR
+        if not self.enabled:
+            color = (180, 180, 180)
+            
+        pygame.draw.rect(screen, color, self.rect, border_radius=8)
+        pygame.draw.rect(screen, (40, 40, 100), self.rect, 2, border_radius=8)
+        
+        text_color = (255, 255, 255) if self.enabled else (220, 220, 220)
+        text_surf = font_small.render(self.text, True, text_color)
+        text_rect = text_surf.get_rect(center=self.rect.center)
+        screen.blit(text_surf, text_rect)
+        
+        if self.cost > 0:
+            cost_text = font_tiny.render(f"成本: ${self.cost}", True, (255, 255, 200))
+            cost_rect = cost_text.get_rect(midbottom=(self.rect.centerx, self.rect.bottom - 5))
+            screen.blit(cost_text, cost_rect)
+    
+    def check_hover(self, pos):
+        self.hovered = self.rect.collidepoint(pos)
+        return self.hovered
+    
+    def handle_event(self, event, game_state):
+        if event.type == MOUSEBUTTONDOWN and event.button == 1:
+            if self.hovered and self.enabled and game_state.balance >= self.cost:
+                if self.action:
+                    self.action(game_state)
+                    return True
+        return False
+
+# 游戏操作函数
+def raise_prices(game_state):
+    game_state.price = min(200, game_state.price + 10)
+    game_state.actions.append(f"第{game_state.round}轮: 提高价格至${game_state.price}")
+
+def lower_prices(game_state):
+    game_state.price = max(40, game_state.price - 10)
+    game_state.actions.append(f"第{game_state.round}轮: 降低价格至${game_state.price}")
+
+def increase_production(game_state):
+    game_state.production = min(1500, game_state.production + 100)
+    game_state.actions.append(f"第{game_state.round}轮: 增加产量至{game_state.production}单位")
+
+def decrease_production(game_state):
+    game_state.production = max(300, game_state.production - 100)
+    game_state.actions.append(f"第{game_state.round}轮: 减少产量至{game_state.production}单位")
+
+def lobby_government(game_state):
+    if game_state.balance >= 1500:
+        game_state.balance -= 1500
+        game_state.antitrust_level = max(0, game_state.antitrust_level - 15)
+        game_state.actions.append(f"第{game_state.round}轮: 游说政府 (反垄断压力 -15)")
+
+def invest_innovation(game_state):
+    if game_state.balance >= 2000:
+        game_state.balance -= 2000
+        game_state.innovation = min(100, game_state.innovation + 15)
+        game_state.actions.append(f"第{game_state.round}轮: 投资创新 (创新水平 +15)")
+
+def run_pr_campaign(game_state):
+    if game_state.balance >= 1200:
+        game_state.balance -= 1200
+        game_state.public_opinion = min(100, game_state.public_opinion + 12)
+        game_state.actions.append(f"第{game_state.round}轮: 公关活动 (公众舆论 +12)")
+
+def acquire_competitor(game_state):
+    if game_state.balance >= 5000 and game_state.market_share < 0.85:
+        game_state.balance -= 5000
+        game_state.market_share = min(0.85, game_state.market_share + 0.08)
+        game_state.antitrust_level += 20
+        game_state.actions.append(f"第{game_state.round}轮: 收购竞争对手 (市场份额 +8%, 反垄断压力 +20)")
+
+# 绘制图表函数
+def draw_bar_chart(screen, x, y, width, height, value, max_value, color, label):
+    # 绘制背景
+    pygame.draw.rect(screen, (220, 220, 220), (x, y, width, height), border_radius=3)
+    
+    # 绘制值
+    bar_height = int((value / max_value) * (height - 4))
+    pygame.draw.rect(screen, color, (x + 2, y + height - bar_height - 2, width - 4, bar_height), border_radius=3)
+    
+    # 绘制标签
+    label_surf = font_tiny.render(label, True, TEXT_COLOR)
+    screen.blit(label_surf, (x, y + height + 5))
+    
+    # 绘制值文本
+    value_surf = font_tiny.render(f"{int(value)}", True, TEXT_COLOR)
+    screen.blit(value_surf, (x + width/2 - value_surf.get_width()/2, y - 25))
+
+# 绘制折线图
+def draw_line_chart(screen, x, y, width, height, values, color, label):
+    if len(values) < 2:
+        return
+        
+    # 绘制图表区域
+    pygame.draw.rect(screen, (240, 240, 240), (x, y, width, height))
+    pygame.draw.rect(screen, (180, 180, 180), (x, y, width, height), 1)
+    
+    # 绘制标题
+    title_surf = font_tiny.render(label, True, TEXT_COLOR)
+    screen.blit(title_surf, (x + width//2 - title_surf.get_width()//2, y - 20))
+    
+    # 绘制坐标轴
+    pygame.draw.line(screen, TEXT_COLOR, (x, y + height), (x + width, y + height), 2)  # X轴
+    pygame.draw.line(screen, TEXT_COLOR, (x, y), (x, y + height), 2)  # Y轴
+    
+    # 计算点
+    max_val = max(max(values), 1)
+    min_val = min(min(values), 0)
+    range_val = max_val - min_val
+    
+    points = []
+    for i, val in enumerate(values):
+        x_pos = x + (i / (len(values) - 1)) * width
+        y_pos = y + height - ((val - min_val) / range_val) * height
+        points.append((x_pos, y_pos))
+    
+    # 绘制折线
+    if len(points) > 1:
+        pygame.draw.lines(screen, color, False, points, 2)
+    
+    # 绘制点
+    for point in points:
+        pygame.draw.circle(screen, color, (int(point[0]), int(point[1])), 4)
+
+# 绘制仪表盘
+def draw_gauge(screen, x, y, size, value, color, label):
+    # 绘制仪表盘背景
+    pygame.draw.circle(screen, (220, 220, 220), (x, y), size)
+    pygame.draw.circle(screen, (180, 180, 180), (x, y), size, 2)
+    
+    # 绘制刻度
+    for i in range(0, 101, 10):
+        angle = math.radians(135 + i * 1.8)
+        start_x = x + (size - 10) * math.cos(angle)
+        start_y = y - (size - 10) * math.sin(angle)
+        end_x = x + (size - (5 if i % 25 != 0 else 15)) * math.cos(angle)
+        end_y = y - (size - (5 if i % 25 != 0 else 15)) * math.sin(angle)
+        pygame.draw.line(screen, TEXT_COLOR, (start_x, start_y), (end_x, end_y), 2)
+    
+    # 绘制指针
+    angle = math.radians(135 + value * 1.8)
+    end_x = x + (size - 20) * math.cos(angle)
+    end_y = y - (size - 20) * math.sin(angle)
+    pygame.draw.line(screen, color, (x, y), (end_x, end_y), 4)
+    pygame.draw.circle(screen, TEXT_COLOR, (x, y), 8)
+    pygame.draw.circle(screen, color, (x, y), 6)
+    
+    # 绘制标签
+    label_surf = font_tiny.render(label, True, TEXT_COLOR)
+    screen.blit(label_surf, (x - label_surf.get_width()//2, y + size + 10))
+    
+    # 绘制值
+    value_surf = font_small.render(f"{int(value)}%", True, color)
+    screen.blit(value_surf, (x - value_surf.get_width()//2, y - size//2))
+
+# 绘制需求曲线
+def draw_demand_curve(screen, x, y, width, height, price, demand):
+    # 绘制坐标轴
+    pygame.draw.line(screen, TEXT_COLOR, (x, y + height), (x + width, y + height), 2)  # X轴 (数量)
+    pygame.draw.line(screen, TEXT_COLOR, (x, y), (x, y + height), 2)  # Y轴 (价格)
+    
+    # 绘制标签
+    price_label = font_tiny.render("价格 ($)", True, TEXT_COLOR)
+    screen.blit(price_label, (x - 30, y - 20))
+    
+    qty_label = font_tiny.render("数量", True, TEXT_COLOR)
+    screen.blit(qty_label, (x + width - 20, y + height + 5))
+    
+    # 绘制需求曲线 (简化版本)
+    points = []
+    for qty in range(300, 1501, 100):
+        price_val = max(40, min(200, int(220 - 0.1 * qty + random.randint(-5, 5)))
+        x_pos = x + (qty - 300) / 1200 * width
+        y_pos = y + height - (price_val - 40) / 160 * height
+        points.append((x_pos, y_pos))
+    
+    if len(points) > 1:
+        pygame.draw.lines(screen, GREEN, False, points, 2)
+    
+    # 绘制当前点
+    x_pos = x + (demand - 300) / 1200 * width
+    y_pos = y + height - (price - 40) / 160 * height
+    pygame.draw.circle(screen, HIGHLIGHT, (int(x_pos), int(y_pos)), 8)
+    
+    # 绘制当前点标签
+    point_label = font_tiny.render(f"当前: ${price}, {demand}单位", True, HIGHLIGHT)
+    screen.blit(point_label, (x_pos - point_label.get_width()//2, y_pos - 25))
+
+# 主游戏函数
+def main():
+    game_state = GameState()
+    clock = pygame.time.Clock()
+    
+    # 创建按钮
+    buttons = [
+        Button(50, 600, 180, 50, "提高价格", raise_prices),
+        Button(240, 600, 180, 50, "降低价格", lower_prices),
+        Button(430, 600, 180, 50, "增加产量", increase_production),
+        Button(620, 600, 180, 50, "减少产量", decrease_production),
+        Button(810, 600, 180, 50, "结束回合", game_state.advance_round),
+        Button(50, 660, 180, 50, "游说政府", lobby_government, 1500),
+        Button(240, 660, 180, 50, "投资创新", invest_innovation, 2000),
+        Button(430, 660, 180, 50, "公关活动", run_pr_campaign, 1200),
+        Button(620, 660, 180, 50, "收购竞争对手", acquire_competitor, 5000),
+    ]
+    
+    # 历史数据
+    profit_history = [0]
+    market_share_history = [65]
+    antitrust_history = [0]
+    
+    running = True
+    while running:
+        mouse_pos = pygame.mouse.get_pos()
+        
+        # 事件处理
+        for event in pygame.event.get():
+            if event.type == QUIT:
+                running = False
+            
+            if not game_state.game_over:
+                for button in buttons:
+                    button.handle_event(event, game_state)
+            
+            if event.type == KEYDOWN:
+                if event.key == K_r:  # 按R重置游戏
+                    game_state.reset()
+                    profit_history = [0]
+                    market_share_history = [65]
+                    antitrust_history = [0]
+                elif event.key == K_ESCAPE:
+                    running = False
+        
+        # 更新按钮状态
+        for button in buttons:
+            button.check_hover(mouse_pos)
+            # 根据资金更新按钮可用状态
+            if button.cost > 0:
+                button.enabled = game_state.balance >= button.cost
+        
+        # 绘制界面
+        screen.fill(BACKGROUND)
+        
+        # 绘制标题
+        title = font_large.render("垄断经济学模拟游戏", True, TEXT_COLOR)
+        screen.blit(title, (WIDTH//2 - title.get_width()//2, 15))
+        
+        # 绘制状态面板
+        pygame.draw.rect(screen, PANEL_BG, (20, 70, WIDTH-40, 150), border_radius=12)
+        pygame.draw.rect(screen, (40, 40, 100), (20, 70, WIDTH-40, 150), 2, border_radius=12)
+        
+        # 绘制状态信息
+        round_text = font_medium.render(f"第 {game_state.round} 轮", True, TEXT_COLOR)
+        screen.blit(round_text, (40, 85))
+        
+        balance_text = font_medium.render(f"资金: ${game_state.balance:,}", True, TEXT_COLOR)
+        screen.blit(balance_text, (40, 120))
+        
+        profit_text = font_medium.render(f"上轮利润: ${game_state.last_profit:,}", 
+                                        True, GREEN if game_state.last_profit >= 0 else RED)
+        screen.blit(profit_text, (40, 155))
+        
+        price_text = font_small.render(f"价格: ${game_state.price}", True, TEXT_COLOR)
+        screen.blit(price_text, (250, 90))
+        
+        production_text = font_small.render(f"产量: {game_state.production} 单位", True, TEXT_COLOR)
+        screen.blit(production_text, (250, 120))
+        
+        demand_text = font_small.render(f"需求: {int(game_state.demand)} 单位", True, TEXT_COLOR)
+        screen.blit(demand_text, (250, 150))
+        
+        cost_text = font_small.render(f"单位成本: ${game_state.cost_per_unit}", True, TEXT_COLOR)
+        screen.blit(cost_text, (400, 90))
+        
+        market_text = font_small.render(f"市场份额: {game_state.market_share*100:.1f}%", True, TEXT_COLOR)
+        screen.blit(market_text, (400, 120))
+        
+        # 绘制图表区域
+        pygame.draw.rect(screen, PANEL_BG, (20, 240, WIDTH-40, 340), border_radius=12)
+        pygame.draw.rect(screen, (40, 40, 100), (20, 240, WIDTH-40, 340), 2, border_radius=12)
+        
+        # 绘制仪表盘
+        draw_gauge(screen, 200, 390, 60, game_state.antitrust_level, RED, "反垄断压力")
+        draw_gauge(screen, 400, 390, 60, game_state.public_opinion, YELLOW, "公众舆论")
+        draw_gauge(screen, 600, 390, 60, game_state.innovation, GREEN, "创新水平")
+        
+        # 绘制条形图
+        draw_bar_chart(screen, 750, 280, 80, 200, min(game_state.production, game_state.demand), 
+                      1500, GREEN, "销量")
+        draw_bar_chart(screen, 850, 280, 80, 200, game_state.production, 1500, PURPLE, "产量")
+        draw_bar_chart(screen, 950, 280, 80, 200, game_state.demand, 1500, HIGHLIGHT, "需求")
+        
+        # 绘制需求曲线
+        draw_demand_curve(screen, 750, 500, 220, 60, game_state.price, game_state.demand)
+        
+        # 绘制折线图
+        draw_line_chart(screen, 40, 290, 280, 90, profit_history, GREEN, "利润历史")
+        draw_line_chart(screen, 40, 410, 280, 90, market_share_history, PURPLE, "市场份额历史")
+        draw_line_chart(screen, 40, 530, 280, 90, antitrust_history, RED, "反垄断压力历史")
+        
+        # 绘制按钮
+        for button in buttons:
+            button.draw(screen)
+        
+        # 绘制操作历史
+        pygame.draw.rect(screen, PANEL_BG, (20, 480, 300, 90), border_radius=8)
+        pygame.draw.rect(screen, (40, 40, 100), (20, 480, 300, 90), 1, border_radius=8)
+        
+        history_title = font_small.render("最近操作:", True, TEXT_COLOR)
+        screen.blit(history_title, (30, 490))
+        
+        if game_state.actions:
+            last_action = game_state.actions[-1]
+            action_text = font_tiny.render(last_action, True, TEXT_COLOR)
+            screen.blit(action_text, (30, 520))
+            
+            if len(game_state.actions) > 1:
+                prev_action = game_state.actions[-2]
+                prev_text = font_tiny.render(prev_action, True, TEXT_COLOR)
+                screen.blit(prev_text, (30, 545))
+        
+        # 游戏结束画面
+        if game_state.game_over:
+            overlay = pygame.Surface((WIDTH, HEIGHT), pygame.SRCALPHA)
+            overlay.fill((0, 0, 0, 180))
+            screen.blit(overlay, (0, 0))
+            
+            if game_state.win:
+                result_text = font_large.render("游戏胜利!", True, GREEN)
+                reason_text = font_medium.render(f"达成目标: {game_state.lose_reason}", True, (200, 255, 200))
+            else:
+                result_text = font_large.render("游戏结束!", True, RED)
+                reason_text = font_medium.render(f"失败原因: {game_state.lose_reason}", True, (255, 200, 200))
+            
+            screen.blit(result_text, (WIDTH//2 - result_text.get_width()//2, HEIGHT//2 - 80))
+            screen.blit(reason_text, (WIDTH//2 - reason_text.get_width()//2, HEIGHT//2 - 20))
+            
+            restart_text = font_medium.render("按 R 键重新开始游戏", True, (255, 255, 200))
+            screen.blit(restart_text, (WIDTH//2 - restart_text.get_width()//2, HEIGHT//2 + 50))
+            
+            esc_text = font_small.render("按 ESC 键退出", True, (200, 200, 255))
+            screen.blit(esc_text, (WIDTH//2 - esc_text.get_width()//2, HEIGHT//2 + 100))
+        
+        # 绘制帮助文本
+        help_text = font_tiny.render("R: 重置游戏 | ESC: 退出", True, (120, 120, 150))
+        screen.blit(help_text, (WIDTH - help_text.get_width() - 20, HEIGHT - 25))
+        
+        pygame.display.flip()
+        clock.tick(60)
+        
+        # 更新历史数据
+        if not game_state.game_over and len(profit_history) < 20:
+            profit_history.append(game_state.last_profit // 100)
+            market_share_history.append(game_state.market_share * 100)
+            antitrust_history.append(game_state.antitrust_level)
+    
+    pygame.quit()
+    sys.exit()
+
+if __name__ == "__main__":
+    main()
